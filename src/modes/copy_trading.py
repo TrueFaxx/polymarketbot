@@ -2,8 +2,9 @@
 
 import asyncio
 import time
+from collections import deque
 from datetime import datetime
-from typing import Dict, Any, Set, Optional
+from typing import Deque, Dict, Any, Set, Optional
 
 try:
     import aiohttp
@@ -12,7 +13,10 @@ except ImportError as e:
 
 from ..polymarket.order_executor import OrderExecutor
 from ..risk.risk_manager import RiskManager
+from ..utils.dashboard import DashboardServer
 from ..utils.logger import TradingLogger
+from ..utils.position_tracker import PositionTracker
+from ..utils.tui import TradingTUI
 
 
 class CopyTradingMode:
@@ -62,6 +66,26 @@ class CopyTradingMode:
         self.processed_trades: Set[str] = set()
         self._last_ts: Optional[int] = None  # Data API timestamp cursor (int)
         self._q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=self.queue_max)
+        self._recent_trades: Deque[Dict[str, Any]] = deque(maxlen=10)
+
+        ui_config = config.get("ui", {})
+        dashboard_config = config.get("dashboard", {})
+        self.position_tracker = PositionTracker(
+            data_file=config.get("position_tracking_file", "copy_positions.json"),
+            max_closed=int(config.get("max_closed_positions", 200)),
+        )
+        self.tui = TradingTUI(
+            enabled=bool(ui_config.get("enabled", True)),
+            refresh_per_second=int(ui_config.get("refresh_per_second", 4)),
+            max_recent_trades=int(ui_config.get("max_recent_trades", 6)),
+            max_closed_positions=int(ui_config.get("max_closed_positions", 6)),
+        )
+        self.dashboard = None
+        if dashboard_config.get("enabled", False):
+            self.dashboard = DashboardServer(
+                host=dashboard_config.get("host", "0.0.0.0"),
+                port=int(dashboard_config.get("port", 8000)),
+            )
 
         self._poll_task: Optional[asyncio.Task] = None
         self._consume_task: Optional[asyncio.Task] = None
@@ -212,6 +236,20 @@ class CopyTradingMode:
 
             if result.get("success"):
                 self.risk_manager.record_trade(trade_log)
+                position_update = self.position_tracker.record_trade(
+                    market_id=market_id,
+                    market_name=market_name,
+                    side=side,
+                    size=scaled_size,
+                    price=trade_log.get("price", price),
+                    timestamp=trade_log.get("timestamp"),
+                )
+                if position_update.get("status") == "unmatched_sell":
+                    self.logger.warning(
+                        f"Received SELL without an open position for {market_name} ({market_id})."
+                    )
+                trade_log["position_status"] = position_update.get("status")
+                trade_log["position_realized_pnl"] = position_update.get("realized_pnl")
                 if not result.get("paper_trade"):
                     await asyncio.sleep(0.5)
                 balance = result.get("balance")
@@ -224,6 +262,7 @@ class CopyTradingMode:
                 if "pnl" in result:
                     balance_data["pnl"] = result.get("pnl")
                 self.logger.log_balance(balance_data)
+                self._recent_trades.append(trade_log)
 
         except Exception as e:
             self.logger.error(f"Error handling user trade: {e}", exc_info=True)
@@ -363,6 +402,22 @@ class CopyTradingMode:
                         "pnl": pnl,
                     }
                 )
+                positions_snapshot = self.position_tracker.snapshot()
+                ui_state = {
+                    "status": "running" if self.running else "stopped",
+                    "balance": balance,
+                    "pnl": pnl,
+                    "queue": f"{self._q.qsize()}/{self.queue_max}",
+                    "last_ts": self._last_ts,
+                    "recent_trades": list(self._recent_trades),
+                    "open_positions": positions_snapshot.get("open_positions", []),
+                    "closed_positions": positions_snapshot.get("closed_positions", []),
+                    "realized_pnl": positions_snapshot.get("realized_pnl_total", 0.0),
+                    "mode": "copy_trading",
+                }
+                self.tui.update_state(ui_state)
+                if self.dashboard:
+                    self.dashboard.update_state(ui_state)
                 self.logger.info(
                     f"Copy trading status: queue={self._q.qsize()}/{self.queue_max} | "
                     f"last_ts={self._last_ts}"
@@ -392,6 +447,10 @@ class CopyTradingMode:
 
         balance = self.order_executor.get_balance()
         self.logger.log_balance({"balance": balance, "paper_trade": self.order_executor.paper_trading})
+
+        self.tui.start()
+        if self.dashboard:
+            self.dashboard.start()
 
         self._poll_task = asyncio.create_task(self._poll_loop(), name="copytrade_poller")
         self._consume_task = asyncio.create_task(self._consume_loop(), name="copytrade_consumer")
@@ -424,6 +483,10 @@ class CopyTradingMode:
                 *(t for t in (self._poll_task, self._consume_task, self._status_task) if t),
                 return_exceptions=True,
             )
+
+            self.tui.stop()
+            if self.dashboard:
+                self.dashboard.stop()
 
             self.logger.info("Copy trading mode stopped")
 

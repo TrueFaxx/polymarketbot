@@ -40,6 +40,21 @@ copy_trading:
   
   max_delay: 5
 
+  # Track open/closed positions locally for dashboard/tui
+  position_tracking_file: "copy_positions.json"
+  max_closed_positions: 200
+
+  ui:
+    enabled: true
+    refresh_per_second: 4
+    max_recent_trades: 6
+    max_closed_positions: 6
+
+  dashboard:
+    enabled: false
+    host: "0.0.0.0"
+    port: 8000
+
 # Risk Management
 risk_management:
   # Maximum bet size per trade (USDC)
