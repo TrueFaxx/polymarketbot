@@ -1,0 +1,70 @@
+# Polymarket Trading Bot Configuration
+
+# Trading mode: 'trend_analysis' or 'copy_trading'
+mode: copy_trading
+# Paper trading mode (true = simulate trades, false = real trades)
+paper_trading: true
+
+# Paper trading settings
+paper_trading_settings:
+  initial_balance: 1000000.0
+
+trend_analysis:
+  interval: 0.5
+  
+  indicators:
+    ema_short: 9
+    ema_long: 21
+    rsi_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+  
+  signals:
+    rsi_overbought: 70
+    rsi_oversold: 30
+  
+  # Polymarket Bitcoin market (15min up/down)
+  market_id: "btc-updown-15m-1767756600"  # To be filled with actual market ID
+  
+  exchange: coinbase
+  symbol: BTC/USD
+
+copy_trading:
+  target_wallet: "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"  # To be filled
+  
+  position_scale: 1.0
+  
+  max_delay: 5
+
+# Risk Management
+risk_management:
+  # Maximum bet size per trade (USDC)
+  max_bet_size: 10000.0
+  
+  # Minimum balance threshold (stop trading if below)
+  min_balance_threshold: 10.0
+  
+  # Daily loss limit (optional, 0 = disabled)
+  daily_loss_limit: 0
+  
+  # Maximum number of trades per day (0 = unlimited)
+  max_daily_trades: 0
+
+# Polymarket API settings
+polymarket:
+  # CLOB API endpoint
+  clob_url: https://clob.polymarket.com
+  
+  # WebSocket endpoint
+  ws_url: wss://ws-subscriptions.polymarket.com
+  
+  # Chain ID (137 for Polygon mainnet)
+  chain_id: 137
+
+# Logging
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  log_dir: logs
+  console_output: true
+
