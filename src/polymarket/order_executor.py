@@ -190,3 +190,10 @@ class OrderExecutor:
                 'balance': self.get_balance(),
                 'positions': self.get_positions()
             }
+
+    def get_order_status(self, order_id: str) -> Optional[Dict[str, Any]]:
+        if self.paper_trading:
+            return None
+        if not self.api_client.is_initialized():
+            return None
+        return self.api_client.get_order_status(order_id)

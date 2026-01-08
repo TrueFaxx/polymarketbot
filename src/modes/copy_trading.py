@@ -108,6 +108,24 @@ class CopyTradingMode:
         if len(self.processed_trades) > 3000:
             self.processed_trades = set(list(self.processed_trades)[-1500:])
 
+    @staticmethod
+    def _normalize_order_status(order_status: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = {
+            "order_status": order_status.get("status")
+            or order_status.get("state")
+            or order_status.get("statusType"),
+            "filled_size": order_status.get("filledSize")
+            or order_status.get("filled_size")
+            or order_status.get("filledQuantity"),
+            "remaining_size": order_status.get("remainingSize")
+            or order_status.get("remaining_size")
+            or order_status.get("remainingQuantity"),
+            "avg_fill_price": order_status.get("avgFillPrice")
+            or order_status.get("avg_fill_price")
+            or order_status.get("averageFillPrice"),
+        }
+        return {k: v for k, v in normalized.items() if v is not None}
+
     # --------------------
     # Trade handling
     # --------------------
@@ -185,11 +203,17 @@ class CopyTradingMode:
                     trade_log["balance_after"] = result.get("balance")
                 if "pnl" in result:
                     trade_log["pnl"] = result.get("pnl")
+                if not result.get("paper_trade") and result.get("order_id"):
+                    order_status = self.order_executor.get_order_status(result["order_id"])
+                    if order_status:
+                        trade_log.update(self._normalize_order_status(order_status))
 
             self.logger.log_trade(trade_log)
 
             if result.get("success"):
                 self.risk_manager.record_trade(trade_log)
+                if not result.get("paper_trade"):
+                    await asyncio.sleep(0.5)
                 balance = result.get("balance")
                 if balance is None:
                     balance = self.order_executor.get_balance()
