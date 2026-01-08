@@ -34,6 +34,9 @@ copy_trading:
   target_wallet: "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"  # To be filled
   
   position_scale: 1.0
+  # When set > 0, override buy size to use this percentage of portfolio balance.
+  # Example: 0.05 = 5% of current balance per buy.
+  position_size_pct: 0.0
   
   max_delay: 5
 
@@ -67,4 +70,3 @@ logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
   log_dir: logs
   console_output: true
-

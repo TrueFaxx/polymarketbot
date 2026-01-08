@@ -45,6 +45,7 @@ class CopyTradingMode:
         # Core config
         self.target_wallet = (config.get("target_wallet") or "").strip()
         self.position_scale = float(config.get("position_scale", 1.0))
+        self.position_size_pct = float(config.get("position_size_pct", 0.0))
         self.max_delay = float(config.get("max_delay", 5))  # seconds
 
         # Latency knobs
@@ -131,13 +132,17 @@ class CopyTradingMode:
 
             # scale
             scaled_size = size * self.position_scale
+            balance = self.order_executor.get_balance()
+            pct_size = None
+            if self.position_size_pct > 0 and side == "buy":
+                pct_size = (balance * self.position_size_pct) / price if price > 0 else 0
+                scaled_size = pct_size
 
             self.logger.info(
                 f"Detected target trade: {side.upper()} {size} @ {price} on {market_name} | copying {scaled_size}"
             )
 
             # Risk check
-            balance = self.order_executor.get_balance()
             risk_check = self.risk_manager.check_pre_trade(scaled_size, price, balance)
             if not risk_check.get("allowed", False):
                 self.logger.warning(f"Copy trade blocked by risk manager: {risk_check.get('reason', 'unknown')}")
@@ -167,6 +172,7 @@ class CopyTradingMode:
                 "reason": f"Copied from {wallet[:8]}...",
                 "original_size": size,
                 "scale_factor": self.position_scale,
+                "position_size_pct": self.position_size_pct,
                 "tx_hash": trade_data.get("tx_hash"),
             }
 
