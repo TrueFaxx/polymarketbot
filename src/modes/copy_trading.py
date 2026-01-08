@@ -53,6 +53,7 @@ class CopyTradingMode:
         self.poll_interval = float(config.get("poll_interval", 0.35))
         self.batch_limit = int(config.get("poll_batch_limit", 200))
         self.queue_max = int(config.get("queue_max", 2000))
+        self.status_interval = float(config.get("status_interval", 15))
 
         self.data_api_url = data_api_url
 
@@ -64,6 +65,7 @@ class CopyTradingMode:
 
         self._poll_task: Optional[asyncio.Task] = None
         self._consume_task: Optional[asyncio.Task] = None
+        self._status_task: Optional[asyncio.Task] = None
 
     # --------------------
     # Helpers
@@ -105,6 +107,24 @@ class CopyTradingMode:
         # Avoid unbounded growth
         if len(self.processed_trades) > 3000:
             self.processed_trades = set(list(self.processed_trades)[-1500:])
+
+    @staticmethod
+    def _normalize_order_status(order_status: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = {
+            "order_status": order_status.get("status")
+            or order_status.get("state")
+            or order_status.get("statusType"),
+            "filled_size": order_status.get("filledSize")
+            or order_status.get("filled_size")
+            or order_status.get("filledQuantity"),
+            "remaining_size": order_status.get("remainingSize")
+            or order_status.get("remaining_size")
+            or order_status.get("remainingQuantity"),
+            "avg_fill_price": order_status.get("avgFillPrice")
+            or order_status.get("avg_fill_price")
+            or order_status.get("averageFillPrice"),
+        }
+        return {k: v for k, v in normalized.items() if v is not None}
 
     # --------------------
     # Trade handling
@@ -178,11 +198,32 @@ class CopyTradingMode:
 
             if not result.get("success"):
                 trade_log["error"] = result.get("error", "Unknown error")
+            else:
+                if "balance" in result:
+                    trade_log["balance_after"] = result.get("balance")
+                if "pnl" in result:
+                    trade_log["pnl"] = result.get("pnl")
+                if not result.get("paper_trade") and result.get("order_id"):
+                    order_status = self.order_executor.get_order_status(result["order_id"])
+                    if order_status:
+                        trade_log.update(self._normalize_order_status(order_status))
 
             self.logger.log_trade(trade_log)
 
             if result.get("success"):
                 self.risk_manager.record_trade(trade_log)
+                if not result.get("paper_trade"):
+                    await asyncio.sleep(0.5)
+                balance = result.get("balance")
+                if balance is None:
+                    balance = self.order_executor.get_balance()
+                balance_data = {
+                    "balance": balance,
+                    "paper_trade": self.order_executor.paper_trading,
+                }
+                if "pnl" in result:
+                    balance_data["pnl"] = result.get("pnl")
+                self.logger.log_balance(balance_data)
 
         except Exception as e:
             self.logger.error(f"Error handling user trade: {e}", exc_info=True)
@@ -310,6 +351,29 @@ class CopyTradingMode:
             except Exception as e:
                 self.logger.error(f"Consume error: {e}", exc_info=True)
 
+    async def _status_loop(self) -> None:
+        while self.running:
+            try:
+                balance = self.order_executor.get_balance()
+                pnl = self.order_executor.get_pnl()
+                self.logger.log_balance(
+                    {
+                        "balance": balance,
+                        "paper_trade": self.order_executor.paper_trading,
+                        "pnl": pnl,
+                    }
+                )
+                self.logger.info(
+                    f"Copy trading status: queue={self._q.qsize()}/{self.queue_max} | "
+                    f"last_ts={self._last_ts}"
+                )
+                await asyncio.sleep(self.status_interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.logger.warning(f"Status loop error: {e}")
+                await asyncio.sleep(self.status_interval)
+
     # --------------------
     # Public API
     # --------------------
@@ -331,10 +395,11 @@ class CopyTradingMode:
 
         self._poll_task = asyncio.create_task(self._poll_loop(), name="copytrade_poller")
         self._consume_task = asyncio.create_task(self._consume_loop(), name="copytrade_consumer")
+        self._status_task = asyncio.create_task(self._status_loop(), name="copytrade_status")
 
         try:
             done, _ = await asyncio.wait(
-                {self._poll_task, self._consume_task},
+                {self._poll_task, self._consume_task, self._status_task},
                 return_when=asyncio.FIRST_EXCEPTION,
             )
 
@@ -351,12 +416,12 @@ class CopyTradingMode:
         finally:
             self.running = False
 
-            for t in (self._poll_task, self._consume_task):
+            for t in (self._poll_task, self._consume_task, self._status_task):
                 if t and not t.done():
                     t.cancel()
 
             await asyncio.gather(
-                *(t for t in (self._poll_task, self._consume_task) if t),
+                *(t for t in (self._poll_task, self._consume_task, self._status_task) if t),
                 return_exceptions=True,
             )
 
