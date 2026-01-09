@@ -7,4 +7,5 @@ ccxt>=4.2.0
 ta>=0.11.0
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
-
+aiohttp>=3.9.0
+rich>=13.7.0
